@@ -1,6 +1,7 @@
 # Kubernetes DevSecOps Admission Sentinel & Policy Auditor ☸️🛡️
 
 [![CI/CD Pipeline](https://github.com/GarciaVillenaLuis/kubernetes-devsecops-admission-sentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/GarciaVillenaLuis/kubernetes-devsecops-admission-sentinel/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/GarciaVillenaLuis/kubernetes-devsecops-admission-sentinel/actions/workflows/codeql.yml/badge.svg)](https://github.com/GarciaVillenaLuis/kubernetes-devsecops-admission-sentinel/actions/workflows/codeql.yml)
 [![Pod Security Standards](https://img.shields.io/badge/Kubernetes-PSS%20Restricted-326CE5?style=flat-square&logo=kubernetes&logoColor=white)](https://kubernetes.io/docs/concepts/security/pod-security-standards/)
 [![CIS Benchmark](https://img.shields.io/badge/CIS-Kubernetes%20v1.8-0052cc?style=flat-square&logo=securityscorecard&logoColor=white)](https://www.cisecurity.org/)
 [![NIST Compliance](https://img.shields.io/badge/NIST-SP%20800--190%20(Container)-orange?style=flat-square)](https://csrc.nist.gov/)
