@@ -116,3 +116,8 @@ python -m unittest discover -s tests -p "test_*.py"
 ## 📄 License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+
+
+## 🔒 Security Governance & CodeQL SAST Baseline
+
+This repository enforces continuous semantic code analysis via official **GitHub CodeQL** and automated zero-vulnerability security baselines for all multi-cloud governance modules.
