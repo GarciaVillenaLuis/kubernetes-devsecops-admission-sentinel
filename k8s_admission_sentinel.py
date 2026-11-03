@@ -40,7 +40,7 @@ class KubernetesSecurityAuditor:
             raise ValueError("Target security level must be 'baseline' or 'restricted'")
 
     def parse_manifest(self, content_str: str) -> List[Dict[str, Any]]:
-        """Parses JSON or simple YAML-like manifest structures without requiring PyYAML."""
+        """Parses JSON or YAML manifest structures supporting single or multi-doc payloads."""
         content_str = content_str.strip()
         if not content_str:
             return []
@@ -55,7 +55,17 @@ class KubernetesSecurityAuditor:
             except json.JSONDecodeError:
                 pass
 
-        # Parse lightweight YAML documents
+        # Try standard PyYAML if installed
+        try:
+            import yaml
+            parsed = list(yaml.safe_load_all(content_str))
+            valid_docs = [d for d in parsed if isinstance(d, dict)]
+            if valid_docs:
+                return valid_docs
+        except (ImportError, Exception):
+            pass
+
+        # Fallback pure-Python lightweight YAML parser for standard K8s objects
         docs = []
         raw_docs = content_str.split("---")
         for doc_str in raw_docs:
@@ -63,104 +73,155 @@ class KubernetesSecurityAuditor:
             if not doc_str:
                 continue
             parsed_doc = self._parse_simple_yaml(doc_str)
-            if parsed_doc:
+            if parsed_doc and isinstance(parsed_doc, dict):
                 docs.append(parsed_doc)
         return docs
 
     def _parse_simple_yaml(self, text: str) -> Dict[str, Any]:
         """A robust fallback parser for standard Kubernetes deployment YAML structures."""
-        # Simple recursive line-by-line parser for standard K8s objects
-        root: Dict[str, Any] = {}
-        stack: List[Tuple[int, Any]] = [(0, root)]
-
-        lines = text.splitlines()
-        for raw_line in lines:
-            line = raw_line.rstrip()
-            if not line or line.strip().startswith("#"):
+        lines: List[Tuple[int, str]] = []
+        for line in text.splitlines():
+            r = line.rstrip()
+            if not r or r.strip().startswith("#"):
                 continue
+            lines.append((len(r) - len(r.lstrip()), r.strip()))
 
-            indent = len(line) - len(line.lstrip())
-            stripped = line.strip()
+        if not lines:
+            return {}
 
-            # Pop stack to matching indent
-            while len(stack) > 1 and stack[-1][0] >= indent:
-                stack.pop()
+        def parse_val(val_str: str) -> Any:
+            val_str = val_str.strip()
+            if val_str.startswith("[") and val_str.endswith("]"):
+                return [x.strip().strip("'\"") for x in val_str[1:-1].split(",") if x.strip()]
+            clean = val_str.strip("'\"")
+            if clean.lower() == "true":
+                return True
+            if clean.lower() == "false":
+                return False
+            if clean.isdigit():
+                return int(clean)
+            return clean
 
-            parent = stack[-1][1]
+        def parse_block(index: int, min_indent: int) -> Tuple[Any, int]:
+            if index >= len(lines):
+                return None, index
 
-            if ":" in stripped:
-                colon_idx = stripped.find(":")
-                key = stripped[:colon_idx].strip()
-                val = stripped[colon_idx + 1:].strip()
+            first_indent, first_line = lines[index]
+            if first_indent < min_indent:
+                return None, index
 
-                if key.startswith("- "):
-                    # List item with dict
-                    key = key[2:].strip()
-                    item_dict: Dict[str, Any] = {}
-                    if isinstance(parent, list):
-                        parent.append(item_dict)
-                    elif isinstance(parent, dict):
-                        # Should not normally happen in strict yaml but let's handle
-                        pass
-                    parent = item_dict
-                    stack.append((indent, parent))
+            if first_line.startswith("- "):
+                result_list: List[Any] = []
+                while index < len(lines):
+                    indent, line = lines[index]
+                    if indent < min_indent:
+                        break
+                    if not line.startswith("- "):
+                        break
 
-                if val == "":
-                    # Nested object or list
-                    new_obj: Dict[str, Any] = {}
-                    if isinstance(parent, dict):
-                        parent[key] = new_obj
-                    stack.append((indent + 2, new_obj))
-                elif val.startswith("[") and val.endswith("]"):
-                    # Inline list
-                    items = [x.strip().strip("'\"") for x in val[1:-1].split(",") if x.strip()]
-                    if isinstance(parent, dict):
-                        parent[key] = items
-                else:
-                    # Scalar value
-                    clean_val: Any = val.strip("'\"")
-                    if clean_val.lower() == "true":
-                        clean_val = True
-                    elif clean_val.lower() == "false":
-                        clean_val = False
-                    elif clean_val.isdigit():
-                        clean_val = int(clean_val)
-                    if isinstance(parent, dict):
-                        parent[key] = clean_val
-            elif stripped.startswith("- "):
-                val = stripped[2:].strip().strip("'\"")
-                if isinstance(parent, list):
-                    parent.append(val)
-                elif isinstance(parent, dict):
-                    # convert parent or create list if needed
-                    pass
-        return root
+                    item_text = line[2:].strip()
+                    index += 1
+                    if ":" in item_text and not (item_text.startswith("{") or item_text.startswith("[")):
+                        k, v = item_text.split(":", 1)
+                        k = k.strip()
+                        v = v.strip()
+                        item_dict: Dict[str, Any] = {}
+                        if v:
+                            item_dict[k] = parse_val(v)
+                        else:
+                            sub_val, index = parse_block(index, indent + 2)
+                            item_dict[k] = sub_val
+
+                        while index < len(lines):
+                            c_indent, c_line = lines[index]
+                            if c_indent <= indent:
+                                break
+                            if c_line.startswith("- "):
+                                break
+                            if ":" in c_line:
+                                ck, cv = c_line.split(":", 1)
+                                ck = ck.strip()
+                                cv = cv.strip()
+                                index += 1
+                                if cv:
+                                    item_dict[ck] = parse_val(cv)
+                                else:
+                                    sub_val, index = parse_block(index, c_indent + 2)
+                                    item_dict[ck] = sub_val
+                            else:
+                                index += 1
+                        result_list.append(item_dict)
+                    else:
+                        result_list.append(parse_val(item_text))
+                return result_list, index
+            else:
+                result_dict: Dict[str, Any] = {}
+                while index < len(lines):
+                    indent, line = lines[index]
+                    if indent < min_indent:
+                        break
+                    if ":" not in line:
+                        index += 1
+                        continue
+                    k, v = line.split(":", 1)
+                    k = k.strip()
+                    v = v.strip()
+                    index += 1
+                    if v:
+                        result_dict[k] = parse_val(v)
+                    else:
+                        sub_val, index = parse_block(index, indent + 1)
+                        result_dict[k] = sub_val
+                return result_dict, index
+
+        parsed, _ = parse_block(0, 0)
+        return parsed if isinstance(parsed, dict) else {}
 
     def audit_workload(self, manifest: Dict[str, Any]) -> Dict[str, Any]:
         """Audits a Kubernetes resource and evaluates Pod Security Standards."""
-        kind = manifest.get("kind", "Unknown")
-        metadata = manifest.get("metadata", {})
-        name = metadata.get("name", "unnamed-workload")
-        namespace = metadata.get("namespace", "default")
+        if not isinstance(manifest, dict):
+            return {
+                "kind": "Unknown",
+                "name": "invalid-manifest",
+                "namespace": "default",
+                "target_level": self.target_level,
+                "admission_decision": "DENIED",
+                "compliance_score": 0.0,
+                "violations_count": 1,
+                "violations": [{"id": "ERR-01", "severity": "HIGH", "container": "manifest", "title": "Manifest is not a valid dictionary object", "remediation": "Provide valid Kubernetes YAML or JSON"}],
+                "passed_rules_count": 0
+            }
+
+        kind = manifest.get("kind", "Unknown") or "Unknown"
+        metadata = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+        name = metadata.get("name", "unnamed-workload") if metadata.get("name") else "unnamed-workload"
+        namespace = metadata.get("namespace", "default") if metadata.get("namespace") else "default"
 
         # Extract Pod Template Spec
-        pod_spec = manifest.get("spec", {})
+        pod_spec = manifest.get("spec") if isinstance(manifest.get("spec"), dict) else {}
         if kind in ("Deployment", "StatefulSet", "DaemonSet", "Job"):
-            pod_spec = pod_spec.get("template", {}).get("spec", {})
+            tmpl = pod_spec.get("template") if isinstance(pod_spec.get("template"), dict) else {}
+            pod_spec = tmpl.get("spec") if isinstance(tmpl.get("spec"), dict) else {}
         elif kind == "CronJob":
-            pod_spec = pod_spec.get("jobTemplate", {}).get("spec", {}).get("template", {}).get("spec", {})
+            jt = pod_spec.get("jobTemplate") if isinstance(pod_spec.get("jobTemplate"), dict) else {}
+            jt_spec = jt.get("spec") if isinstance(jt.get("spec"), dict) else {}
+            tmpl = jt_spec.get("template") if isinstance(jt_spec.get("template"), dict) else {}
+            pod_spec = tmpl.get("spec") if isinstance(tmpl.get("spec"), dict) else {}
+
+        if not isinstance(pod_spec, dict):
+            pod_spec = {}
 
         violations: List[Dict[str, Any]] = []
         passed_rules: List[str] = []
 
         # 1. PSS-01: Privileged Containers
-        containers = pod_spec.get("containers", [])
-        init_containers = pod_spec.get("initContainers", [])
-        all_containers = containers + (init_containers if isinstance(init_containers, list) else [])
+        raw_containers = pod_spec.get("containers") if isinstance(pod_spec.get("containers"), list) else []
+        raw_init = pod_spec.get("initContainers") if isinstance(pod_spec.get("initContainers"), list) else []
+        all_containers = [c for c in raw_containers + raw_init if isinstance(c, dict)]
 
         for c in all_containers:
             c_name = c.get("name", "unknown")
-            sec_ctx = c.get("securityContext", {})
+            sec_ctx = c.get("securityContext") if isinstance(c.get("securityContext"), dict) else {}
             if sec_ctx.get("privileged") is True:
                 violations.append({
                     "id": "PSS-01",
@@ -216,9 +277,10 @@ class KubernetesSecurityAuditor:
         dangerous_caps = {"SYS_ADMIN", "NET_ADMIN", "ALL", "CAP_SYS_ADMIN", "CAP_NET_ADMIN"}
         for c in all_containers:
             c_name = c.get("name", "unknown")
-            sec_ctx = c.get("securityContext", {})
-            caps = sec_ctx.get("capabilities", {})
-            added = set(caps.get("add", []))
+            sec_ctx = c.get("securityContext") if isinstance(c.get("securityContext"), dict) else {}
+            caps = sec_ctx.get("capabilities") if isinstance(sec_ctx.get("capabilities"), dict) else {}
+            added_raw = caps.get("add") if isinstance(caps.get("add"), list) else ([caps.get("add")] if caps.get("add") else [])
+            added = set(added_raw)
             clashing = added.intersection(dangerous_caps)
             if clashing:
                 violations.append({
@@ -231,12 +293,12 @@ class KubernetesSecurityAuditor:
 
         # RESTRICTED CONTROLS (Evaluate if level is restricted)
         if self.target_level == "restricted":
-            pod_sec_ctx = pod_spec.get("securityContext", {})
+            pod_sec_ctx = pod_spec.get("securityContext") if isinstance(pod_spec.get("securityContext"), dict) else {}
 
             # PSS-06: Non-Root User
             for c in all_containers:
                 c_name = c.get("name", "unknown")
-                sec_ctx = c.get("securityContext", {})
+                sec_ctx = c.get("securityContext") if isinstance(c.get("securityContext"), dict) else {}
                 run_as_non_root = sec_ctx.get("runAsNonRoot", pod_sec_ctx.get("runAsNonRoot"))
                 run_as_user = sec_ctx.get("runAsUser", pod_sec_ctx.get("runAsUser"))
 
@@ -254,7 +316,7 @@ class KubernetesSecurityAuditor:
             # PSS-07: Read-Only Root Filesystem
             for c in all_containers:
                 c_name = c.get("name", "unknown")
-                sec_ctx = c.get("securityContext", {})
+                sec_ctx = c.get("securityContext") if isinstance(c.get("securityContext"), dict) else {}
                 if sec_ctx.get("readOnlyRootFilesystem") is not True:
                     violations.append({
                         "id": "PSS-07",
@@ -269,9 +331,10 @@ class KubernetesSecurityAuditor:
             # PSS-08: Drop ALL Capabilities
             for c in all_containers:
                 c_name = c.get("name", "unknown")
-                sec_ctx = c.get("securityContext", {})
-                caps = sec_ctx.get("capabilities", {})
-                dropped = [str(x).upper() for x in caps.get("drop", [])]
+                sec_ctx = c.get("securityContext") if isinstance(c.get("securityContext"), dict) else {}
+                caps = sec_ctx.get("capabilities") if isinstance(sec_ctx.get("capabilities"), dict) else {}
+                drop_raw = caps.get("drop") if isinstance(caps.get("drop"), list) else ([caps.get("drop")] if caps.get("drop") else [])
+                dropped = [str(x).upper() for x in drop_raw]
                 if "ALL" not in dropped:
                     violations.append({
                         "id": "PSS-08",
@@ -286,8 +349,8 @@ class KubernetesSecurityAuditor:
             # PSS-09: Resource Limits
             for c in all_containers:
                 c_name = c.get("name", "unknown")
-                resources = c.get("resources", {})
-                limits = resources.get("limits", {})
+                resources = c.get("resources") if isinstance(c.get("resources"), dict) else {}
+                limits = resources.get("limits") if isinstance(resources.get("limits"), dict) else {}
                 if not limits.get("cpu") or not limits.get("memory"):
                     violations.append({
                         "id": "PSS-09",
@@ -302,7 +365,7 @@ class KubernetesSecurityAuditor:
             # PSS-10: Allow Privilege Escalation
             for c in all_containers:
                 c_name = c.get("name", "unknown")
-                sec_ctx = c.get("securityContext", {})
+                sec_ctx = c.get("securityContext") if isinstance(c.get("securityContext"), dict) else {}
                 if sec_ctx.get("allowPrivilegeEscalation") is not False:
                     violations.append({
                         "id": "PSS-10",
@@ -314,9 +377,13 @@ class KubernetesSecurityAuditor:
                 else:
                     passed_rules.append(f"PSS-10 (No privilege escalation: {c_name})")
 
-        total_checks = len(violations) + len(passed_rules)
-        score = round((len(passed_rules) / max(1, total_checks)) * 100, 1)
-        allowed = len([v for v in violations if v["severity"] in ("CRITICAL", "HIGH")]) == 0
+        if not all_containers and kind not in ("Pod", "Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob"):
+            score = 100.0
+            allowed = True
+        else:
+            total_checks = len(violations) + len(passed_rules)
+            score = round((len(passed_rules) / max(1, total_checks)) * 100, 1)
+            allowed = len([v for v in violations if v["severity"] in ("CRITICAL", "HIGH")]) == 0
 
         return {
             "kind": kind,
