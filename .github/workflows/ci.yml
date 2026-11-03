@@ -15,4 +15,5 @@ jobs:
         run: |
           python k8s_admission_sentinel.py --stats
           python k8s_admission_sentinel.py --file samples/hardened_deployment.yaml --format json
+          python k8s_admission_sentinel.py --file samples/vulnerable_deployment.yaml --format json || true
           python k8s_admission_sentinel.py --admission-webhook --file samples/admission_review_request.json
