@@ -1,0 +1,18 @@
+name: CI & Kubernetes DevSecOps Pipeline
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run Unit Tests
+        run: python -m unittest discover -s tests -p "test_*.py"
+      - name: Validate Sample Workloads
+        run: |
+          python k8s_admission_sentinel.py --stats
+          python k8s_admission_sentinel.py --file samples/hardened_deployment.yaml --format json
+          python k8s_admission_sentinel.py --admission-webhook --file samples/admission_review_request.json
