@@ -126,6 +126,42 @@ class TestKubernetesSecurityAuditor(unittest.TestCase):
         self.assertEqual(len(docs), 1)
         self.assertEqual(docs[0]["metadata"]["name"], "json-pod")
 
+    def test_parse_manifest_yaml_hardened(self):
+        yaml_path = os.path.join(os.path.dirname(__file__), "..", "samples", "hardened_deployment.yaml")
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        docs = self.auditor_restricted.parse_manifest(content)
+        self.assertEqual(len(docs), 1)
+        doc = docs[0]
+        self.assertEqual(doc["metadata"]["name"], "hardened-cloud-native-service")
+        res = self.auditor_restricted.audit_workload(doc)
+        self.assertEqual(res["admission_decision"], "ALLOWED")
+        self.assertEqual(res["compliance_score"], 100.0)
+        self.assertEqual(res["violations_count"], 0)
+
+    def test_parse_manifest_yaml_vulnerable(self):
+        yaml_path = os.path.join(os.path.dirname(__file__), "..", "samples", "vulnerable_deployment.yaml")
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        docs = self.auditor_restricted.parse_manifest(content)
+        self.assertEqual(len(docs), 1)
+        doc = docs[0]
+        self.assertEqual(doc["metadata"]["name"], "vulnerable-workload")
+        res = self.auditor_restricted.audit_workload(doc)
+        self.assertEqual(res["admission_decision"], "DENIED")
+        self.assertGreater(res["violations_count"], 5)
+
+    def test_crd_or_none_spec_safe(self):
+        # Workload with None spec or non-standard CRD
+        res = self.auditor_restricted.audit_workload({"kind": "CustomSecret", "metadata": {"name": "crd-secret"}, "spec": None})
+        self.assertEqual(res["name"], "crd-secret")
+        self.assertEqual(res["admission_decision"], "ALLOWED")
+        self.assertEqual(res["compliance_score"], 100.0)
+
+        # Invalid non-dict input
+        res_invalid = self.auditor_restricted.audit_workload("invalid_string_manifest")  # type: ignore
+        self.assertEqual(res_invalid["admission_decision"], "DENIED")
+
 
 if __name__ == "__main__":
     unittest.main()
