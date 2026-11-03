@@ -1,0 +1,61 @@
+{
+  "apiVersion": "admission.k8s.io/v1",
+  "kind": "AdmissionReview",
+  "request": {
+    "uid": "705ab4f5-6393-11e8-b7cc-42010a800002",
+    "kind": {
+      "group": "apps",
+      "version": "v1",
+      "kind": "Deployment"
+    },
+    "resource": {
+      "group": "apps",
+      "version": "v1",
+      "resource": "deployments"
+    },
+    "namespace": "ecommerce-prod",
+    "operation": "CREATE",
+    "userInfo": {
+      "username": "developer@enterprise.cloud",
+      "groups": ["system:authenticated"]
+    },
+    "object": {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "payment-api",
+        "namespace": "ecommerce-prod"
+      },
+      "spec": {
+        "template": {
+          "spec": {
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 10001
+            },
+            "containers": [
+              {
+                "name": "payment-gateway",
+                "image": "payment-service:v2.4.0",
+                "securityContext": {
+                  "privileged": false,
+                  "allowPrivilegeEscalation": false,
+                  "readOnlyRootFilesystem": true,
+                  "capabilities": {
+                    "drop": ["ALL"]
+                  }
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "500m",
+                    "memory": "512Mi"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
