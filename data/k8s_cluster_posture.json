@@ -14,7 +14,7 @@
   "admission_enforcement": "STRICT_DENY",
   "cluster_posture_score": 97.7,
   "status": "COMPLIANT",
-  "last_sync_utc": "2026-11-12T10:14:26Z",
+  "last_sync_utc": "2026-11-17T08:00:00Z",
   "telemetry_seq": 1,
-  "mosaic_seq": 3
+  "mosaic_seq": 4
 }
