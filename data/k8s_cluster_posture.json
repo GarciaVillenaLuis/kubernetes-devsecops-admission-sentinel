@@ -1,15 +1,15 @@
 {
-  "last_audit_utc": "2026-11-27T07:31:02.161Z",
+  "last_audit_utc": "2026-11-27T07:31:22.740Z",
   "engine_version": "1.4.0",
   "cluster_name": "aks-enterprise-prod-eu-west-1",
   "audit_standard": "Kubernetes Pod Security Standards (PSS Restricted) & CIS Kubernetes Benchmark v1.8",
   "metrics": {
-    "total_workloads_evaluated": 188,
+    "total_workloads_evaluated": 186,
     "compliant_workloads": 181,
     "compliance_ratio": 0.969,
     "privileged_pods_in_prod": 0,
     "root_containers_detected": 1,
-    "missing_resource_limits": 2
+    "missing_resource_limits": 3
   },
   "admission_enforcement": "STRICT_DENY",
   "cluster_posture_score": 96.9,
